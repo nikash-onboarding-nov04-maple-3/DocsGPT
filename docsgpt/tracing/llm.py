@@ -91,6 +91,7 @@ def start_llm_span(
         "gen_ai.request.model": str(model) if model else None,
         "docsgpt.token_source": getattr(llm, "_token_usage_source", None) or "agent_stream",
         "docsgpt.stream": bool(stream),
+        "gen_ai.is_streaming": bool(stream),
         "docsgpt.tool_count": len(tools) if tools else None,
     }
     return core.start_span(

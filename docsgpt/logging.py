@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Generator, Iterator, List, Optional
 
 from docsgpt import tracing
+from docsgpt.tracing.content import capture, events, messages
+from docsgpt.tracing.convergent import agent_trace
 from docsgpt.core.run_budget import is_budget_exhausted
 from docsgpt.core import log_context
 from docsgpt.storage.db.repositories.stack_logs import StackLogsRepository
@@ -135,7 +137,7 @@ def log_activity() -> Callable:
             endpoint = keys["endpoint"]
             user = keys["user_id"]
             api_key = data.get("user_api_key", "")
-            query = kwargs.get("query", getattr(args[0], "query", ""))
+            query = kwargs.get("query", args[1] if len(args) > 1 else getattr(args[0], "query", ""))
             agent_id = keys["agent_id"] or kwargs.get("agent_id")
             conversation_id = kwargs.get("conversation_id") or keys["conversation_id"]
             model = keys["model"]
@@ -175,14 +177,15 @@ def log_activity() -> Callable:
 
             # The outermost agent run names the trace's activity, which is how
             # a webhook/system Logs row (keyed by activity_id) finds its trace.
-            tracing.bind_if_unset(activity_id=activity_id)
+            tracing.bind_if_unset(activity_id=activity_id, conversation_id=conversation_id, agent_id=agent_id)
             span = start_agent_span(args[0], agent_id=agent_id, model=model, endpoint=endpoint)
 
+            capture(span, **{"gen_ai.input.messages": messages(query, "user")})
             error: BaseException | None = None
             completed = False
             try:
                 generator = func(*args, **kwargs)
-                yield from _consume_and_log(generator, context)
+                yield from events(span, _consume_and_log(generator, context))
                 completed = True
             except Exception as exc:
                 # Only ``Exception`` counts as an activity error; ``GeneratorExit``
@@ -201,7 +204,12 @@ def log_activity() -> Callable:
                 _end_agent_span(span, context, error=error, completed=completed)
                 log_context.reset(ctx_token)
 
-        return wrapper
+        @functools.wraps(func)
+        def traced(*args: Any, **kwargs: Any) -> Any:
+            with agent_trace():
+                yield from wrapper(*args, **kwargs)
+
+        return traced
 
     return decorator
 
@@ -246,6 +254,7 @@ def start_agent_span(
             k: v
             for k, v in {
                 "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.agent.name": label,
                 "gen_ai.agent.id": str(agent_id) if agent_id else None,
                 "gen_ai.request.model": str(model) if model else None,
                 "docsgpt.agent_type": label,
