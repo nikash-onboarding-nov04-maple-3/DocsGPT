@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
+from docsgpt.tracing.content import events as trace_events, request as trace_request
+from docsgpt.tracing.convergent import agent_trace
 from docsgpt.activity.flags import check_stream
 from docsgpt.core.run_budget import RoundDeferred, StreamCancelled, is_budget_exhausted
 from docsgpt.agents.attachment_budget import (
@@ -772,12 +774,13 @@ class BaseAgent(ABC):
             pending_tool_calls: The pending tool call descriptors from the pause.
             tool_actions: Client-provided actions resolving the pending calls.
         """
-        with agent_log_context(self), start_agent_span(self, continuation=True):
+        with agent_trace(), agent_log_context(self), start_agent_span(self, continuation=True) as span:
+            trace_request(span, messages)
             try:
                 check_stream(getattr(self.tool_executor, "message_id", None))
-                yield from self._gen_continuation_inner(
+                yield from trace_events(span, self._gen_continuation_inner(
                     messages, tools_dict, pending_tool_calls, tool_actions, reasoning_content
-                )
+                ))
             except RoundDeferred:
                 yield {"tool_calls": self._get_truncated_tool_calls()}
                 yield {"metadata": {"budget_deferred": True}}

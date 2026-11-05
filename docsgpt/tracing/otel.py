@@ -182,11 +182,15 @@ def export_trace(trace: Trace, tracer_provider: Any = None) -> Optional[str]:
         attributes = dict(span.attributes)
         if trace.conversation_id and span.kind in (KIND_LLM, KIND_TOOL):
             attributes.setdefault("gen_ai.conversation.id", trace.conversation_id)
+        if trace.conversation_id:
+            attributes.setdefault("convergent.session.id", trace.conversation_id)
         if span.status and span.status not in (STATUS_OK, STATUS_ERROR):
             attributes["docsgpt.status"] = span.status
         attributes = _attributes(attributes)
         if capture and span.previews:
             attributes.update(_preview_attributes(span.kind, span.previews))
+        if capture:
+            attributes.update(_attributes(getattr(span, "_otel_content", {})))
         otel_span = tracer.start_span(
             span.name,
             context=ot_trace.set_span_in_context(parent),
